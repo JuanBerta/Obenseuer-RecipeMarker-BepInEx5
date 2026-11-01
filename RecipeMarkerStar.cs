@@ -36,7 +36,7 @@ public class RecipeMarkerStar : MonoBehaviour, IPointerClickHandler
         get
         {
             if (_recipe != null) return RecipeMarkerManager.IsRecipeMarked(_recipe.ID);
-            if (_blueprint != null) return RecipeMarkerManager.IsBlueprintMarked(_blueprint.id);
+            if (_blueprint != null) return RecipeMarkerManager.IsBlueprintMarked(_blueprint.Id);
             return false;
         }
     }

@@ -50,47 +50,78 @@ public static class Patch_RecipeListUI_CreateButton
 }
 
 /// <summary>
-/// Worktable (FurnitureCrafting) blueprint grid star patch.
+/// Runtime mount for the worktable blueprint grid star patch.
 ///
-/// Mount point resolution, in order of preference:
-///   1. BuildingSystemSlot.UpdateBuildSlot(BuildingSystem.FurnitureInfo) — the
-///      slot-level fill used by FurnitureShopPanelUI.AddBuildSlot (verified
-///      against the live game Assembly-CSharp.dll).
-///   2. FurnitureShopPanelUI.UpdateSlots(List&lt;FurnitureInfo&gt;, bool) — the
-///      panel-level rebuild that instantiates every BuildingSystemShopSlot and
-///      fills its public `slots` list.
-/// At runtime the first candidate that resolves wins; the single Postfix
-/// handles both mount points by checking the __instance type. If every
-/// candidate is missing, Prepare() logs a loud CRITICAL and skips this patch
-/// without affecting the other patches (no silent failure).
+/// v0.2.5 change: the worktable target is no longer resolved by a
+/// [HarmonyPatch] TargetMethod during Awake PatchAll. On the user's install the
+/// exact methods exist in the live Assembly-CSharp.dll (a decompiler confirms
+/// both), yet Harmony's bulk method resolution still reported "not found" and
+/// Prepare() logged a one-shot CRITICAL before the patch class was skipped
+/// forever. The worktable mount is therefore a plain static method that runs
+/// at startup (right after PatchAll) and again on every craft-menu open:
+///   1. BuildingSystemSlot.UpdateBuildSlot(BuildingSystem.FurnitureInfo) — exact.
+///   2. FurnitureShopPanelUI.UpdateSlots(List&lt;FurnitureInfo&gt;, bool) — exact.
+///   3. Loose scan by method name + parameter type name as a last resort.
+/// The first candidate that resolves wins and is mounted with
+/// Harmony.AddPostfix at runtime; a failed attempt only logs Debug and is
+/// retried on the next open, a successful mount logs Info once with the
+/// resolved signature. This design never emits a single CRITICAL and then
+/// gives up.
 ///
-/// Slot matching never depends on the runtime subclass: the only real signal
-/// that a slot represents a furniture recipe is buildObject.taskItem being a
-/// TaskItemBlueprint (the worktable blueprint list is populated by
-/// TaskItemsManager with exactly that task item type). Player-side
-/// (inventory) slots are skipped explicitly — the vanilla "marked" gold frame
-/// already covers marking there. RecipeMarkerStar.AttachInternal deduplicates
-/// on the target GameObject, so re-runs (category switches, panel rebuilds)
-/// never stack duplicate stars.
+/// The single Postfix handles both mount points by checking the __instance
+/// type. Slot matching never depends on the runtime subclass: the only real
+/// signal that a slot represents a furniture recipe is buildObject.taskItem
+/// being a TaskItemBlueprint. Player-side (inventory) slots are skipped
+/// explicitly. AttachInternal deduplicates on the target GameObject, so
+/// re-runs (category switches, panel rebuilds) never stack duplicate stars.
 /// </summary>
-[HarmonyPatch]
-public static class Patch_BuildingSystemSlot_UpdateBuildSlot
+public static class WorktableMount
 {
-    private static MethodBase TargetMethod()
-    {
-        return ResolveMountPoint();
-    }
+    public static bool Mounted { get; private set; }
 
-    private static bool Prepare(MethodBase original)
+    private static int _attempts;
+
+    /// <summary>
+    /// Fast path: called once after PatchAll at startup. When the target is
+    /// already resolvable (the normal case) the worktable patch is live before
+    /// the player ever opens the craft menu.
+    /// </summary>
+    public static void TryMount()
     {
-        if (original == null)
+        if (Mounted) return;
+        _attempts++;
+
+        MethodBase target = ResolveMountPoint();
+        if (target == null)
         {
-            Plugin.LogError("[RecipeMarker] CRITICAL: neither BuildingSystemSlot.UpdateBuildSlot(FurnitureInfo) nor FurnitureShopPanelUI.UpdateSlots(List<FurnitureInfo>, bool) was found — worktable blueprint stars will not work.");
-            return false;
+            Plugin.LogDebug($"[RecipeMarker] Worktable mount attempt #{_attempts}: no target method found yet (BuildingSystemSlot={typeof(BuildingSystemSlot).FullName}, FurnitureShopPanelUI={typeof(FurnitureShopPanelUI).FullName}); retrying on next craft-menu open.");
+            return;
         }
 
-        Plugin.LogInfo($"[RecipeMarker] UpdateBuildSlot patch mounted on: {original.DeclaringType?.Name}.{original.Name}({string.Join(", ", Array.ConvertAll(original.GetParameters(), p => p.ParameterType.Name))})");
-        return true;
+        try
+        {
+            Plugin.HarmonyInstance.Patch(
+                target,
+                postfix: new HarmonyMethod(typeof(WorktableMount), nameof(WorktableMount.Postfix)));
+            Mounted = true;
+            Plugin.LogInfo($"[RecipeMarker] Worktable patch mounted (attempt #{_attempts}): {target.DeclaringType?.Name}.{target.Name}({string.Join(", ", Array.ConvertAll(target.GetParameters(), p => p.ParameterType.Name))})");
+        }
+        catch (Exception ex)
+        {
+            Plugin.LogDebug($"[RecipeMarker] Worktable mount attempt #{_attempts} failed: {ex.Message}; retrying on next craft-menu open.");
+        }
+    }
+
+    /// <summary>
+    /// Called from the OpenMenu postfix on every craft-menu open. Retries the
+    /// deferred mount and, once mounted, re-applies stars to the freshly built
+    /// panel (the vanilla fill already ran before this postfix runs).
+    /// </summary>
+    public static void OnCraftingMenuOpened(ShopBaseUI shop)
+    {
+        TryMount();
+        if (!Mounted || shop == null || shop.shopPanel == null) return;
+        PatchPanelSlots(shop.shopPanel);
     }
 
     /// <summary>
@@ -101,7 +132,8 @@ public static class Patch_BuildingSystemSlot_UpdateBuildSlot
     ///        that moves FurnitureInfo (or changes a signature) still mounts
     ///        instead of failing the whole patch.
     /// The first candidate that resolves wins; every candidate failing yields
-    /// null and Prepare() logs CRITICAL (no silent failure).
+    /// null, which the caller treats as a deferred retry (Debug log) rather
+    /// than a one-shot CRITICAL.
     /// </summary>
     private static MethodBase ResolveMountPoint()
     {
@@ -205,11 +237,34 @@ public static class Patch_BuildingSystemSlot_UpdateBuildSlot
         if (buildObject.taskItem is TaskItemBlueprint blueprint)
         {
             RecipeMarkerStar.AttachBlueprint(slot.gameObject, blueprint, 18f);
-            Plugin.LogDebug($"[RecipeMarker] Star attached: go={slot.gameObject.name}, slotType={slotTypeName}, shopSlotType={shopSlotTypeName}, blueprint={blueprint.id}, totalStars={RecipeMarkerStar.All.Count}");
+            Plugin.LogDebug($"[RecipeMarker] Star attached: go={slot.gameObject.name}, slotType={slotTypeName}, shopSlotType={shopSlotTypeName}, blueprint={blueprint.Id}, totalStars={RecipeMarkerStar.All.Count}");
         }
         else
         {
             Plugin.LogDebug($"[RecipeMarker] UpdateBuildSlot(FurnitureInfo) no blueprint: go={slot.gameObject.name}, slotType={slotTypeName}, shopSlotType={shopSlotTypeName}, taskItem={taskItemTypeName}");
+        }
+    }
+}
+
+/// <summary>
+/// ShopBaseUI.OpenMenu(BaseCrafting) postfix — every time a crafting panel
+/// (worktable) opens, give the deferred worktable mount another chance and
+/// re-apply stars to the freshly built panel. This is the high-level entry
+/// point that stays stable across game updates (verified against the live
+/// Assembly-CSharp.dll, 0.5.17 build 26349752).
+/// </summary>
+[HarmonyPatch(typeof(ShopBaseUI), nameof(ShopBaseUI.OpenMenu), new[] { typeof(BaseCrafting) })]
+public static class Patch_ShopBaseUI_OpenMenu
+{
+    private static void Postfix(ShopBaseUI __instance)
+    {
+        try
+        {
+            WorktableMount.OnCraftingMenuOpened(__instance);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[RecipeMarker] OpenMenu postfix: {ex.Message}");
         }
     }
 }
@@ -237,6 +292,10 @@ public static class Patch_TaskItemUI_SetItem
             if (taskItem is TaskItemBlueprint blueprint)
             {
                 RecipeMarkerStar.AttachBlueprint(__instance.gameObject, blueprint, 18f);
+                // Info-level diagnostic so gallery rows can be verified in the
+                // shipped log: the blueprint's stable Id (with the raw id and
+                // item name for comparison) and its current marked state.
+                Plugin.LogInfo($"[RecipeMarker] Blueprint gallery row star: name='{blueprint.itemName}', id='{blueprint.Id}' (raw='{blueprint.id}'), marked={RecipeMarkerManager.IsBlueprintMarked(blueprint.Id)}");
                 return;
             }
 

@@ -17,12 +17,15 @@ namespace ObenseuerRecipeMarker;
 /// Marked recipes persist and their input items are highlighted in the
 /// inventory (reusing the vanilla "marked" gold frame on ItemData).
 /// </summary>
-[BepInPlugin("com.beinded.obenseuer.recipemarker", "Obenseuer Recipe Marker", "0.2.4")]
+[BepInPlugin("com.beinded.obenseuer.recipemarker", "Obenseuer Recipe Marker", "0.2.5")]
 public class Plugin : BaseUnityPlugin
 {
     public const string HarmonyId = "com.beinded.obenseuer.recipemarker";
 
     internal static Plugin Instance { get; private set; }
+
+    /// <summary>Harmony instance shared with the runtime worktable mount.</summary>
+    internal static Harmony HarmonyInstance { get; private set; }
 
     /// <summary>Master switch: whether star buttons are shown on recipe buttons.</summary>
     internal static ConfigEntry<bool> ShowStars { get; private set; }
@@ -88,8 +91,17 @@ public class Plugin : BaseUnityPlugin
 
             _harmony = new Harmony(HarmonyId);
             _harmony.PatchAll();
+            HarmonyInstance = _harmony;
+
+            // Fast-path worktable mount: resolves against the live game
+            // assembly right after PatchAll. If the target is not resolvable
+            // yet (or AddPostfix throws), WorktableMount logs Debug and the
+            // OpenMenu postfix keeps retrying on every craft-menu open —
+            // never a one-shot CRITICAL that gives up.
+            WorktableMount.TryMount();
+
             Logger.LogInfo($"[RecipeMarker] Harmony patches applied ({HarmonyId}).");
-            Logger.LogInfo($"[RecipeMarker] Loaded {RecipeMarkerManager.MarkedRecipeIds.Count} marked recipe(s).");
+            Logger.LogInfo($"[RecipeMarker] Loaded {RecipeMarkerManager.MarkedRecipeIds.Count} marked recipe(s), {RecipeMarkerManager.MarkedBlueprintIds.Count} marked blueprint(s).");
         }
         catch (Exception ex)
         {

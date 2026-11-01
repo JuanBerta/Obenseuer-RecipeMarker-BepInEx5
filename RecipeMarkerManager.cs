@@ -66,15 +66,21 @@ public static class RecipeMarkerManager
     /// <summary>Toggle a furniture blueprint's marker (worktable blueprint grid).</summary>
     public static void ToggleBlueprint(TaskItemBlueprint blueprint)
     {
-        if (blueprint == null || string.IsNullOrEmpty(blueprint.id)) return;
+        if (blueprint == null) return;
 
-        if (MarkedBlueprintIds.Contains(blueprint.id))
+        // v0.2.5: use the stable Id property (id -> addressableAssetPath ->
+        // itemName) instead of the raw serialized `id` field. Blueprint assets
+        // often leave `id` empty, which made the old code silently no-op.
+        string blueprintId = blueprint.Id;
+        if (string.IsNullOrEmpty(blueprintId)) return;
+
+        if (MarkedBlueprintIds.Contains(blueprintId))
         {
-            MarkedBlueprintIds.Remove(blueprint.id);
+            MarkedBlueprintIds.Remove(blueprintId);
         }
         else
         {
-            MarkedBlueprintIds.Add(blueprint.id);
+            MarkedBlueprintIds.Add(blueprintId);
         }
 
         Save();
@@ -123,7 +129,12 @@ public static class RecipeMarkerManager
         MarkedRecipeIds.Clear();
         MarkedRecipeIds.AddRange(recipeIds);
         MarkedBlueprintIds.Clear();
-        MarkedBlueprintIds.AddRange(blueprintIds);
+        // v0.2.5: drop any empty ids written by older builds (raw TaskItemBlueprint.id
+        // was empty on real assets, so a persisted entry could not be matched anyway).
+        foreach (string id in blueprintIds)
+        {
+            if (!string.IsNullOrEmpty(id)) MarkedBlueprintIds.Add(id);
+        }
         RebuildInputCache();
     }
 
