@@ -17,7 +17,7 @@ namespace ObenseuerRecipeMarker;
 /// Marked recipes persist and their input items are highlighted in the
 /// inventory (reusing the vanilla "marked" gold frame on ItemData).
 /// </summary>
-[BepInPlugin("com.beinded.obenseuer.recipemarker", "Obenseuer Recipe Marker", "0.2.2")]
+[BepInPlugin("com.beinded.obenseuer.recipemarker", "Obenseuer Recipe Marker", "0.2.3")]
 public class Plugin : BaseUnityPlugin
 {
     public const string HarmonyId = "com.beinded.obenseuer.recipemarker";
