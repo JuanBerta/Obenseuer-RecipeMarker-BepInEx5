@@ -76,35 +76,71 @@ public static class Patch_RecipeListUI_CreateButton
 [HarmonyPatch]
 public static class Patch_BuildingSystemSlot_UpdateBuildSlot
 {
-    private static readonly MethodBase[] CandidateTargets =
-    {
-        AccessTools.DeclaredMethod(typeof(BuildingSystemSlot),
-            nameof(BuildingSystemSlot.UpdateBuildSlot),
-            new[] { typeof(BuildingSystem.FurnitureInfo) }),
-        AccessTools.DeclaredMethod(typeof(FurnitureShopPanelUI),
-            nameof(FurnitureShopPanelUI.UpdateSlots),
-            new[] { typeof(List<BuildingSystem.FurnitureInfo>), typeof(bool) }),
-    };
-
     private static MethodBase TargetMethod()
     {
-        foreach (var candidate in CandidateTargets)
-        {
-            if (candidate != null) return candidate;
-        }
-        return null;
+        return ResolveMountPoint();
     }
 
     private static bool Prepare(MethodBase original)
     {
         if (original == null)
         {
-            Debug.LogError("[RecipeMarker] CRITICAL: neither BuildingSystemSlot.UpdateBuildSlot(FurnitureInfo) nor FurnitureShopPanelUI.UpdateSlots(List<FurnitureInfo>, bool) was found — worktable blueprint stars will not work.");
+            Plugin.LogError("[RecipeMarker] CRITICAL: neither BuildingSystemSlot.UpdateBuildSlot(FurnitureInfo) nor FurnitureShopPanelUI.UpdateSlots(List<FurnitureInfo>, bool) was found — worktable blueprint stars will not work.");
             return false;
         }
 
-        Plugin.LogDebug($"[RecipeMarker] UpdateBuildSlot patch mounted on: {original.DeclaringType?.Name}.{original.Name}({string.Join(", ", Array.ConvertAll(original.GetParameters(), p => p.ParameterType.Name))})");
+        Plugin.LogInfo($"[RecipeMarker] UpdateBuildSlot patch mounted on: {original.DeclaringType?.Name}.{original.Name}({string.Join(", ", Array.ConvertAll(original.GetParameters(), p => p.ParameterType.Name))})");
         return true;
+    }
+
+    /// <summary>
+    /// Ordered mount-point resolution against the live game assembly:
+    ///   1. BuildingSystemSlot.UpdateBuildSlot(BuildingSystem.FurnitureInfo) — exact.
+    ///   2. FurnitureShopPanelUI.UpdateSlots(List&lt;FurnitureInfo&gt;, bool) — exact.
+    ///   3/4. Loose scan by method name + parameter type name, so a game update
+    ///        that moves FurnitureInfo (or changes a signature) still mounts
+    ///        instead of failing the whole patch.
+    /// The first candidate that resolves wins; every candidate failing yields
+    /// null and Prepare() logs CRITICAL (no silent failure).
+    /// </summary>
+    private static MethodBase ResolveMountPoint()
+    {
+        MethodBase candidate = AccessTools.DeclaredMethod(typeof(BuildingSystemSlot),
+            nameof(BuildingSystemSlot.UpdateBuildSlot),
+            new[] { typeof(BuildingSystem.FurnitureInfo) });
+        if (candidate != null) return candidate;
+
+        candidate = AccessTools.DeclaredMethod(typeof(FurnitureShopPanelUI),
+            nameof(FurnitureShopPanelUI.UpdateSlots),
+            new[] { typeof(List<BuildingSystem.FurnitureInfo>), typeof(bool) });
+        if (candidate != null) return candidate;
+
+        const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic |
+                                   BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+
+        foreach (var m in typeof(BuildingSystemSlot).GetMethods(flags))
+        {
+            if (m.Name != nameof(BuildingSystemSlot.UpdateBuildSlot)) continue;
+            var ps = m.GetParameters();
+            if (ps.Length == 1 && ps[0].ParameterType.Name.Contains("FurnitureInfo"))
+            {
+                Plugin.LogInfo($"[RecipeMarker] UpdateBuildSlot loose-scanned mount: {m.DeclaringType?.Name}.{m.Name}({ps[0].ParameterType.FullName})");
+                return m;
+            }
+        }
+
+        foreach (var m in typeof(FurnitureShopPanelUI).GetMethods(flags))
+        {
+            if (m.Name != nameof(FurnitureShopPanelUI.UpdateSlots)) continue;
+            var ps = m.GetParameters();
+            if (ps.Length == 2 && ps[0].ParameterType.Name.Contains("FurnitureInfo"))
+            {
+                Plugin.LogInfo($"[RecipeMarker] UpdateSlots loose-scanned mount: {m.DeclaringType?.Name}.{m.Name}({ps[0].ParameterType.FullName}, {ps[1].ParameterType.FullName})");
+                return m;
+            }
+        }
+
+        return null;
     }
 
     private static void Postfix(object __instance)

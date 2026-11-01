@@ -17,7 +17,7 @@ namespace ObenseuerRecipeMarker;
 /// Marked recipes persist and their input items are highlighted in the
 /// inventory (reusing the vanilla "marked" gold frame on ItemData).
 /// </summary>
-[BepInPlugin("com.beinded.obenseuer.recipemarker", "Obenseuer Recipe Marker", "0.2.3")]
+[BepInPlugin("com.beinded.obenseuer.recipemarker", "Obenseuer Recipe Marker", "0.2.4")]
 public class Plugin : BaseUnityPlugin
 {
     public const string HarmonyId = "com.beinded.obenseuer.recipemarker";
@@ -43,6 +43,30 @@ public class Plugin : BaseUnityPlugin
         string line = $"[RecipeMarker] {message}";
         Instance?.Logger.LogDebug(line);
         Debug.Log(line);
+    }
+
+    /// <summary>
+    /// Info helper used by the Harmony patches. BepInEx Info level is written
+    /// to LogOutput.log by default, unlike Debug, so mount-point diagnostics
+    /// can be verified in the shipped log without enabling Debug logging.
+    /// </summary>
+    public static void LogInfo(string message)
+    {
+        string line = $"[RecipeMarker] {message}";
+        Instance?.Logger.LogInfo(line);
+        Debug.Log(line);
+    }
+
+    /// <summary>
+    /// Error helper used by the Harmony patches. Writes through the BepInEx
+    /// logger AND the Unity console so a mount-point failure is visible no
+    /// matter how the user captures logs (Unity log writer failures included).
+    /// </summary>
+    public static void LogError(string message)
+    {
+        string line = $"[RecipeMarker] {message}";
+        Instance?.Logger.LogError(line);
+        Debug.LogError(line);
     }
 
     private void Awake()
