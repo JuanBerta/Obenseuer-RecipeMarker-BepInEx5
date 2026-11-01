@@ -50,14 +50,19 @@ public static class Patch_RecipeListUI_CreateButton
 }
 
 /// <summary>
-/// BuildingSystemSlot.UpdateBuildSlot postfix — attach a star to the worktable
-/// (FurnitureCrafting) blueprint grid. The worktable right-hand grid is built
-/// by ShopBaseUI + FurnitureShopPanelUI, which instantiate BuildingSystemShopSlot
-/// and call UpdateBuildSlot(BuildingSystem.FurnitureInfo); only slots whose
-/// FurnitureInfo.taskItem is a TaskItemBlueprint (a furniture recipe/blueprint)
-/// receive a star. Shop slots (player inventory side, no taskItem) are skipped.
+/// BuildingSystemSlot.UpdateBuildSlot(FurnitureInfo) postfix — attach a star
+/// to the worktable (FurnitureCrafting) blueprint grid. The worktable
+/// right-hand grid is built by ShopBaseUI + FurnitureShopPanelUI, which
+/// instantiate BuildingSystemShopSlot and call the FurnitureInfo overload.
+/// UpdateBuildSlot has TWO overloads (FurnitureInfo / ItemStack), so the
+/// patch target must name the parameter type explicitly, otherwise Harmony
+/// PatchAll raises AmbiguousMatchException at startup. Only slots whose
+/// FurnitureInfo.taskItem is a TaskItemBlueprint (a furniture
+/// recipe/blueprint) receive a star. Shop slots (player inventory side, no
+/// taskItem) are skipped.
 /// </summary>
-[HarmonyPatch(typeof(BuildingSystemSlot), nameof(BuildingSystemSlot.UpdateBuildSlot))]
+[HarmonyPatch(typeof(BuildingSystemSlot), nameof(BuildingSystemSlot.UpdateBuildSlot),
+    new Type[] { typeof(BuildingSystem.FurnitureInfo) })]
 public static class Patch_BuildingSystemSlot_UpdateBuildSlot
 {
     private static void Postfix(BuildingSystemSlot __instance)
