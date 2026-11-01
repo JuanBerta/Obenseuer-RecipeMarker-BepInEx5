@@ -1,0 +1,79 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>Obenseuer-RecipeMarker</AssemblyName>
+    <RootNamespace>ObenseuerRecipeMarker</RootNamespace>
+    <Version>0.2.0</Version>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>true</AppendTargetFrameworkToOutputPath>
+    <!-- Unity assemblies are AnyCPU/32-bit; do not fail the build on architecture mismatch -->
+    <ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch>None</ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch>
+    <!-- Offline friendly: no PackageReference, no restore needed -->
+    <RestorePackages>false</RestorePackages>
+    <Deploy Condition="'$(Deploy)' == ''">false</Deploy>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Game root; override with /p:GameDir="..." on the command line -->
+    <GameDir Condition="'$(GameDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Obenseuer</GameDir>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- BepInEx 5 core root (single BepInEx.dll); override with /p:BepInEx5Dir="..." -->
+    <BepInEx5Dir Condition="'$(BepInEx5Dir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\ChopChopInc\BepInEx\core</BepInEx5Dir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Game assemblies (Private=false: never copy them into the plugin output) -->
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(GameDir)\Obenseuer_Data\Managed\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- UnityEngine.dll (legacy facade, AssemblyName=UnityEngine) is required because
+         Assembly-CSharp references UnityEngine.MonoBehaviour as living in the "UnityEngine"
+         assembly. UnityEngine.UI types come only from UnityEngine.UI.dll. -->
+    <Reference Include="UnityEngine">
+      <HintPath>$(GameDir)\Obenseuer_Data\Managed\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(GameDir)\Obenseuer_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>$(GameDir)\Obenseuer_Data\Managed\UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>$(GameDir)\Obenseuer_Data\Managed\UnityEngine.UI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>$(GameDir)\Obenseuer_Data\Managed\UnityEngine.UIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Unity.TextMeshPro">
+      <HintPath>$(GameDir)\Obenseuer_Data\Managed\Unity.TextMeshPro.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- BepInEx 5 core (single BepInEx.dll; 0Harmony ships in the 5.x core folder) -->
+    <Reference Include="BepInEx">
+      <HintPath>$(BepInEx5Dir)\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(BepInEx5Dir)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Optional deploy: msbuild Obenseuer-RecipeMarker.csproj /p:Configuration=Release /p:Deploy=true /p:GameDir="..." -->
+  <Target Name="Deploy" AfterTargets="Build" Condition="'$(Deploy)' == 'true'">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(GameDir)\BepInEx\plugins" />
+    <Message Importance="high" Text="[RecipeMarker] Deployed $(TargetFileName) to $(GameDir)\BepInEx\plugins" />
+  </Target>
+
+</Project>
