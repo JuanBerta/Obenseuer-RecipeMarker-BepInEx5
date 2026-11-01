@@ -54,25 +54,70 @@ public static class Patch_RecipeListUI_CreateButton
 /// to the worktable (FurnitureCrafting) blueprint grid. The worktable
 /// right-hand grid is built by ShopBaseUI + FurnitureShopPanelUI, which
 /// instantiate BuildingSystemShopSlot and call the FurnitureInfo overload.
+///
 /// UpdateBuildSlot has TWO overloads (FurnitureInfo / ItemStack), so the
-/// patch target must name the parameter type explicitly, otherwise Harmony
-/// PatchAll raises AmbiguousMatchException at startup. Only slots whose
-/// FurnitureInfo.taskItem is a TaskItemBlueprint (a furniture
-/// recipe/blueprint) receive a star. Shop slots (player inventory side, no
-/// taskItem) are skipped.
+/// patch target is resolved explicitly at runtime through TargetMethod()
+/// instead of a parameterized [HarmonyPatch] attribute — that attribute form
+/// is applied by PatchAll and, if the lookup misbehaves across Harmony /
+/// HarmonyX, either throws (aborting every later patch) or silently applies
+/// nothing. TargetMethod() + Prepare() makes the resolution deterministic and
+/// logs loudly when the target is missing.
+///
+/// The postfix no longer requires __instance to be BuildingSystemShopSlot:
+/// the runtime slot type is trusted to whatever the UI prefab actually uses,
+/// and the only real signal that a slot represents a furniture recipe is
+/// buildObject.taskItem being a TaskItemBlueprint (the worktable blueprint
+/// list is populated by TaskItemsManager with exactly that task item type).
+/// Player-slot (inventory side) slots are skipped explicitly — the vanilla
+/// "marked" gold frame already covers marking there.
 /// </summary>
-[HarmonyPatch(typeof(BuildingSystemSlot), nameof(BuildingSystemSlot.UpdateBuildSlot),
-    new Type[] { typeof(BuildingSystem.FurnitureInfo) })]
+[HarmonyPatch]
 public static class Patch_BuildingSystemSlot_UpdateBuildSlot
 {
+    private static MethodBase TargetMethod()
+    {
+        return AccessTools.DeclaredMethod(typeof(BuildingSystemSlot),
+            nameof(BuildingSystemSlot.UpdateBuildSlot),
+            new[] { typeof(BuildingSystem.FurnitureInfo) });
+    }
+
+    private static bool Prepare(MethodBase original)
+    {
+        if (original == null)
+        {
+            Debug.LogError("[RecipeMarker] CRITICAL: UpdateBuildSlot(FurnitureInfo) not found — worktable blueprint stars will not work.");
+        }
+        return true;
+    }
+
     private static void Postfix(BuildingSystemSlot __instance)
     {
         try
         {
-            if (__instance == null || !(__instance is BuildingSystemShopSlot)) return;
-            if (__instance.buildObject?.taskItem is TaskItemBlueprint blueprint)
+            if (__instance == null) return;
+            var buildObject = __instance.buildObject;
+            if (buildObject == null) return;
+
+            string slotTypeName = __instance.GetType().Name;
+            string shopSlotTypeName = __instance is BuildingSystemShopSlot shopSlot ? shopSlot.shopSlotType.ToString() : "N/A";
+            string taskItemTypeName = buildObject.taskItem == null ? "null" : buildObject.taskItem.GetType().Name;
+
+            // Player inventory side (playerPanel) — vanilla gold frame handles it.
+            if (__instance is BuildingSystemShopSlot playerSide &&
+                playerSide.shopSlotType == BuildingSystemShopSlot.ShopSlotType.PlayerSlot)
+            {
+                Plugin.LogDebug($"[RecipeMarker] UpdateBuildSlot(FurnitureInfo) skipped PlayerSlot: go={__instance.gameObject.name}, taskItem={taskItemTypeName}");
+                return;
+            }
+
+            if (buildObject.taskItem is TaskItemBlueprint blueprint)
             {
                 RecipeMarkerStar.AttachBlueprint(__instance.gameObject, blueprint, 18f);
+                Plugin.LogDebug($"[RecipeMarker] Star attached: go={__instance.gameObject.name}, slotType={slotTypeName}, shopSlotType={shopSlotTypeName}, blueprint={blueprint.id}, totalStars={RecipeMarkerStar.All.Count}");
+            }
+            else
+            {
+                Plugin.LogDebug($"[RecipeMarker] UpdateBuildSlot(FurnitureInfo) no blueprint: go={__instance.gameObject.name}, slotType={slotTypeName}, shopSlotType={shopSlotTypeName}, taskItem={taskItemTypeName}");
             }
         }
         catch (Exception ex)

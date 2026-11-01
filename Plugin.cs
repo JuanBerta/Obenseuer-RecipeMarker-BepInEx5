@@ -17,7 +17,7 @@ namespace ObenseuerRecipeMarker;
 /// Marked recipes persist and their input items are highlighted in the
 /// inventory (reusing the vanilla "marked" gold frame on ItemData).
 /// </summary>
-[BepInPlugin("com.beinded.obenseuer.recipemarker", "Obenseuer Recipe Marker", "0.2.1")]
+[BepInPlugin("com.beinded.obenseuer.recipemarker", "Obenseuer Recipe Marker", "0.2.2")]
 public class Plugin : BaseUnityPlugin
 {
     public const string HarmonyId = "com.beinded.obenseuer.recipemarker";
@@ -31,6 +31,19 @@ public class Plugin : BaseUnityPlugin
     internal static ConfigEntry<KeyCode> ToggleStarsKey { get; private set; }
 
     private Harmony _harmony;
+
+    /// <summary>
+    /// Debug helper used by the Harmony patches. Writes through the BepInEx
+    /// logger AND the Unity console so the message is visible no matter how
+    /// the user captures logs. The messages are intentionally prefixed so
+    /// worktable-slot diagnostics can be filtered with "UpdateBuildSlot".
+    /// </summary>
+    public static void LogDebug(string message)
+    {
+        string line = $"[RecipeMarker] {message}";
+        Instance?.Logger.LogDebug(line);
+        Debug.Log(line);
+    }
 
     private void Awake()
     {

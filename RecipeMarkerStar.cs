@@ -94,9 +94,16 @@ public class RecipeMarkerStar : MonoBehaviour, IPointerClickHandler
 
         star._image = starGo.AddComponent<Image>();
         star._image.raycastTarget = true;
+        star._image.type = Image.Type.Simple;
         star._recipe = recipe;
         star._blueprint = blueprint;
         star.Refresh();
+
+        // Defensive visibility: newly created objects default to active, but
+        // ensure the star is never accidentally disabled by a parent rebuild
+        // and stays on top of the slot artwork.
+        starGo.SetActive(true);
+        rt.SetAsLastSibling();
 
         All.Add(star);
         return star;
@@ -137,7 +144,9 @@ public class RecipeMarkerStar : MonoBehaviour, IPointerClickHandler
         if (_image == null) return;
         bool marked = IsMarked;
         _image.sprite = marked ? GetStarSprite() : GetStarSpriteEmpty();
-        _image.color = marked ? new Color(1f, 0.84f, 0.1f, 1f) : new Color(0.65f, 0.65f, 0.65f, 0.75f);
+        // Unmarked stars are a soft grey so the slot itself stays readable,
+        // but keep the alpha high enough that the star is still discoverable.
+        _image.color = marked ? new Color(1f, 0.84f, 0.1f, 1f) : new Color(0.65f, 0.65f, 0.65f, 0.95f);
     }
 
     public void SetVisible(bool visible)
