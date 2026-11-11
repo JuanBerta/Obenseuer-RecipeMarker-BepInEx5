@@ -25,6 +25,7 @@ public class RecipeMarkerStar : MonoBehaviour, IPointerClickHandler
 
     private static Sprite _starSprite;
     private static Sprite _starSpriteEmpty;
+    private static Sprite _fallbackStarSprite;
 
     private Image _image;
     private Recipe _recipe;
@@ -146,7 +147,10 @@ public class RecipeMarkerStar : MonoBehaviour, IPointerClickHandler
         _image.sprite = marked ? GetStarSprite() : GetStarSpriteEmpty();
         // Unmarked stars are a soft grey so the slot itself stays readable,
         // but keep the alpha high enough that the star is still discoverable.
-        _image.color = marked ? new Color(1f, 0.84f, 0.1f, 1f) : new Color(0.65f, 0.65f, 0.65f, 0.95f);
+        // Marked = yellow hollow star; unmarked = dark grey hollow star.
+        // White was nearly invisible on bright slot backgrounds; dark grey keeps
+        // the marker discoverable while clearly reading as "not active".
+        _image.color = marked ? new Color(1f, 0.84f, 0.1f, 1f) : new Color(0.4f, 0.4f, 0.4f, 1f);
     }
 
     public void SetVisible(bool visible)
@@ -199,17 +203,87 @@ public class RecipeMarkerStar : MonoBehaviour, IPointerClickHandler
 
     private static Sprite GetStarSprite()
     {
-        return _starSprite != null ? _starSprite : Sprite.Create(
-            Texture2D.whiteTexture,
-            new Rect(0f, 0f, 4f, 4f),
-            new Vector2(0.5f, 0.5f));
+        if (_starSprite != null) return _starSprite;
+        // Fallback is a runtime-generated hollow star; a solid white square would block text.
+        return GetFallbackStarSprite();
     }
 
     private static Sprite GetStarSpriteEmpty()
     {
         if (_starSpriteEmpty != null) return _starSpriteEmpty;
-        _starSpriteEmpty = Sprite.Create(Texture2D.whiteTexture,
-            new Rect(0f, 0f, 4f, 4f), new Vector2(0.5f, 0.5f));
+        // Unmarked stars always use the generated hollow star: its pixels are pure
+        // white, so the grey tint stays neutral and never picks up the yellow tone
+        // of the vanilla upgrade-panel sprite (which would look "active").
+        _starSpriteEmpty = GetFallbackStarSprite();
         return _starSpriteEmpty;
+    }
+
+    /// <summary>
+    /// Lazily generate a solid five-pointed star texture (white pixels on a transparent
+    /// background) used whenever the vanilla upgrade-panel sprite is not available.
+    /// The star is fully filled (no hollow center): a hollow outline proved nearly
+    /// invisible on some recipe button backgrounds, so the marker stays solid and gets
+    /// its "not active" look purely from the dark grey Image tint.
+    /// </summary>
+    private static Sprite GetFallbackStarSprite()
+    {
+        if (_fallbackStarSprite != null) return _fallbackStarSprite;
+
+        const int texSize = 64;
+        var tex = new Texture2D(texSize, texSize, TextureFormat.RGBA32, false);
+        tex.name = "RecipeMarkerSolidStar";
+
+        var pixels = new Color[texSize * texSize];
+        for (int i = 0; i < pixels.Length; i++) pixels[i] = new Color(0f, 0f, 0f, 0f);
+
+        float cx = texSize * 0.5f;
+        float cy = texSize * 0.5f;
+        float outerR = texSize * 0.46f;
+        float innerRatio = 0.382f;   // standard pentagram inner radius ratio
+
+        var star = new Vector2[10];
+        for (int i = 0; i < 5; i++)
+        {
+            float aOuter = Mathf.PI / 2f + i * 2f * Mathf.PI / 5f;
+            float aInner = aOuter + Mathf.PI / 5f;
+            star[i * 2] = new Vector2(cx + Mathf.Cos(aOuter) * outerR, cy + Mathf.Sin(aOuter) * outerR);
+            star[i * 2 + 1] = new Vector2(cx + Mathf.Cos(aInner) * outerR * innerRatio, cy + Mathf.Sin(aInner) * outerR * innerRatio);
+        }
+
+        for (int y = 0; y < texSize; y++)
+        {
+            for (int x = 0; x < texSize; x++)
+            {
+                var p = new Vector2(x + 0.5f, y + 0.5f);
+                if (PointInPolygon(p, star))
+                {
+                    pixels[y * texSize + x] = Color.white;
+                }
+            }
+        }
+
+        tex.SetPixels(pixels);
+        tex.Apply();
+        _fallbackStarSprite = Sprite.Create(tex, new Rect(0f, 0f, texSize, texSize), new Vector2(0.5f, 0.5f), 100f);
+        return _fallbackStarSprite;
+    }
+
+    private static bool PointInPolygon(Vector2 point, Vector2[] poly)
+    {
+        int n = poly.Length;
+        bool inside = false;
+        int j = n - 1;
+        for (int i = 0; i < n; i++)
+        {
+            Vector2 pi = poly[i];
+            Vector2 pj = poly[j];
+            if ((pi.y > point.y) != (pj.y > point.y) &&
+                point.x < (pj.x - pi.x) * (point.y - pi.y) / (pj.y - pi.y) + pi.x)
+            {
+                inside = !inside;
+            }
+            j = i;
+        }
+        return inside;
     }
 }

@@ -1,0 +1,13 @@
+=== FILE DESCRIPTIONS ===
+Obenseuer-RecipeMarker-BepInEx6-v0.3.0.rar : Recipe Marker 0.3.0 for BepInEx 6. Extract into the Obenseuer folder (replaces the old DLL).
+Obenseuer-RecipeMarker-BepInEx5-v0.3.0.rar : Recipe Marker 0.3.0 for BepInEx 5. Extract into the Obenseuer folder (replaces the old DLL).
+
+=== CHANGELOG (Nexus "Changelogs" tab) ===
+0.3.0
+- New: search box on the Inventory tab's items gallery (task items, keys, recipes, blueprints). Type to filter every section by name; recipes also match the item they make. Game hotkeys are muted while typing; Enter keeps the filter, Esc or the x clears it.
+- Marked recipes and blueprints are pinned to the top of their gallery section.
+- Marking from anywhere refreshes every open panel right away.
+- More reliable hooking of the worktable blueprint grid and the gallery.
+
+=== ADD TO THE FULL DESCRIPTION (BBCode, features list) ===
+[*][b]Search the gallery[/b]: on the Inventory tab, a search box at the top filters task items, keys, recipes and blueprints by name (recipes also by the item they make). Hotkeys are muted while you type; Esc clears it.

@@ -17,7 +17,7 @@ namespace ObenseuerRecipeMarker;
 /// Marked recipes persist and their input items are highlighted in the
 /// inventory (reusing the vanilla "marked" gold frame on ItemData).
 /// </summary>
-[BepInPlugin("com.beinded.obenseuer.recipemarker", "Obenseuer Recipe Marker", "0.2.5")]
+[BepInPlugin("com.beinded.obenseuer.recipemarker", "Obenseuer Recipe Marker", "0.3.0")]
 public class Plugin : BaseUnityPlugin
 {
     public const string HarmonyId = "com.beinded.obenseuer.recipemarker";
@@ -86,8 +86,12 @@ public class Plugin : BaseUnityPlugin
             RecipeMarkerManager.Load();
 
             // Global sync: any marker change refreshes every attached star
-            // (station buttons, worktable blueprint slots, recipes gallery).
+            // (station buttons, worktable blueprint slots, recipes gallery)
+            // AND re-pins the marked entries on every currently-open panel,
+            // so toggling a star while a panel is open takes effect
+            // immediately instead of on the next close/reopen cycle.
             RecipeMarkerManager.MarkersChanged += RecipeMarkerStar.RefreshAll;
+            RecipeMarkerManager.MarkersChanged += SortRefresh.OnMarkersChanged;
 
             _harmony = new Harmony(HarmonyId);
             _harmony.PatchAll();
@@ -99,6 +103,15 @@ public class Plugin : BaseUnityPlugin
             // OpenMenu postfix keeps retrying on every craft-menu open —
             // never a one-shot CRITICAL that gives up.
             WorktableMount.TryMount();
+
+            // Fast-path gallery (main-menu Recipes/Blueprints grid) mount:
+            // resolves UpdateCategoryRows against the live game assembly and
+            // logs the result at Info level so a silent mount failure is
+            // impossible to miss.
+            GalleryMount.TryMount();
+
+            // Search box over the main-menu items gallery (filters every section by name).
+            GallerySearch.Init(gameObject, _harmony);
 
             Logger.LogInfo($"[RecipeMarker] Harmony patches applied ({HarmonyId}).");
             Logger.LogInfo($"[RecipeMarker] Loaded {RecipeMarkerManager.MarkedRecipeIds.Count} marked recipe(s), {RecipeMarkerManager.MarkedBlueprintIds.Count} marked blueprint(s).");

@@ -5,7 +5,7 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>Obenseuer-RecipeMarker</AssemblyName>
     <RootNamespace>ObenseuerRecipeMarker</RootNamespace>
-    <Version>0.2.5</Version>
+    <Version>0.2.10</Version>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <AppendTargetFrameworkToOutputPath>true</AppendTargetFrameworkToOutputPath>
     <!-- Unity assemblies are AnyCPU/32-bit; do not fail the build on architecture mismatch -->
@@ -52,6 +52,14 @@
     </Reference>
     <Reference Include="UnityEngine.UIModule">
       <HintPath>$(GameDir)\Obenseuer_Data\Managed\UnityEngine.UIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(GameDir)\Obenseuer_Data\Managed\UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>$(GameDir)\Obenseuer_Data\Managed\UnityEngine.TextRenderingModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Unity.TextMeshPro">

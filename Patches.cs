@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
+using System.Text;
 using HarmonyLib;
+using TMPro;
 using UnityEngine;
 
 namespace ObenseuerRecipeMarker;
@@ -17,6 +19,9 @@ public static partial class Patches
 
     internal static readonly FieldInfo ItemDataMarkedField =
         AccessTools.Field(typeof(ItemData), "marked");
+
+    internal static readonly FieldInfo ItemInfoDescriptionField =
+        AccessTools.Field(typeof(ItemInfoPanel), "itemDescripion");
 }
 
 /// <summary>
@@ -46,6 +51,282 @@ public static class Patch_RecipeListUI_CreateButton
         {
             Debug.LogWarning($"[RecipeMarker] CreateButton postfix: {ex.Message}");
         }
+    }
+}
+
+/// <summary>
+/// RecipeListUI.UpdateRecipes postfix — pin every marked recipe to the top
+/// of its own list, in the order the player marked them (earliest mark
+/// first; a later mark stacks behind the earlier ones). The vanilla method
+/// fully rebuilds the list on every refresh (DestroyButtons + refill), so
+/// this postfix runs exactly once per refresh and never competes with later
+/// button creation.
+///
+/// currentRecipes and recipeButtons are reordered in lockstep so the vanilla
+/// selected-recipe restore loop (which pairs the two lists by index) keeps
+/// working, and the button GameObjects are moved to the front of their
+/// parent container — which is what defines the visible order inside a
+/// RecipeListUI section.
+/// </summary>
+[HarmonyPatch(typeof(RecipeListUI), nameof(RecipeListUI.UpdateRecipes))]
+public static class Patch_RecipeListUI_UpdateRecipes
+{
+    private static int _fires;
+
+    private static void Postfix(RecipeListUI __instance)
+    {
+        try
+        {
+            _fires++;
+            if (__instance == null || __instance.currentRecipes == null)
+            {
+                if (_fires <= 3) Plugin.LogInfo($"[RecipeMarker] UpdateRecipes postfix #{_fires}: instance/currentRecipes null, skip.");
+                return;
+            }
+
+            var buttons = Patches.RecipeButtonsField.GetValue(__instance) as List<GameObject>;
+            var recipes = __instance.currentRecipes;
+            if (buttons == null || recipes.Count == 0 || recipes.Count != buttons.Count)
+            {
+                if (_fires <= 3) Plugin.LogInfo($"[RecipeMarker] UpdateRecipes postfix #{_fires}: early return (buttons={(buttons == null ? "null" : buttons.Count.ToString())}, recipes={recipes.Count}).");
+                return;
+            }
+
+            // Collect marked entries in mark order. MarkedRecipeIds is an
+            // insertion-ordered list, so index 0 is the earliest mark.
+            var marked = new List<(int MarkIndex, Recipe Recipe, GameObject Button)>();
+            for (int i = 0; i < recipes.Count; i++)
+            {
+                Recipe recipe = recipes[i];
+                if (recipe == null) continue;
+                int markIndex = RecipeMarkerManager.MarkedRecipeIds.IndexOf(recipe.ID);
+                if (markIndex < 0) continue;
+                marked.Add((markIndex, recipe, buttons[i]));
+            }
+            if (marked.Count == 0) return;
+
+            marked.Sort((a, b) => a.MarkIndex.CompareTo(b.MarkIndex));
+
+            // Rebuild both backing lists in lockstep: marked recipes first
+            // (mark order), then every unmarked recipe in its original order.
+            var pinned = new HashSet<Recipe>();
+            foreach (var entry in marked) pinned.Add(entry.Recipe);
+
+            var newRecipes = new List<Recipe>(recipes.Count);
+            var newButtons = new List<GameObject>(buttons.Count);
+            foreach (var entry in marked)
+            {
+                newRecipes.Add(entry.Recipe);
+                newButtons.Add(entry.Button);
+            }
+            for (int i = 0; i < recipes.Count; i++)
+            {
+                if (pinned.Contains(recipes[i])) continue;
+                newRecipes.Add(recipes[i]);
+                newButtons.Add(buttons[i]);
+            }
+
+            recipes.Clear();
+            recipes.AddRange(newRecipes);
+            buttons.Clear();
+            buttons.AddRange(newButtons);
+
+            // Move the buttons to the front of their parent container. Walk
+            // backwards so the earliest mark ends up as the very first child.
+            for (int i = marked.Count - 1; i >= 0; i--)
+            {
+                Transform t = marked[i].Button.transform;
+                if (t != null) t.SetAsFirstSibling();
+            }
+
+            Plugin.LogInfo($"[RecipeMarker] UpdateRecipes postfix #{_fires}: pinned {marked.Count} marked recipe(s) to the top of '{__instance.name}' (total {recipes.Count}).");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[RecipeMarker] UpdateRecipes postfix: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Transform-only re-pin for a RecipeListUI that is already open when the
+    /// player marks/unmarks a recipe (called from SortRefresh.OnMarkersChanged).
+    /// Moves the marked recipe buttons to the front of their parent container
+    /// in mark order, which is what defines the visible order inside a
+    /// RecipeListUI section. The backing lists (currentRecipes/recipeButtons)
+    /// are intentionally left untouched so the vanilla selected-recipe restore
+    /// loop keeps pairing the two lists by index; the full data+Transform pin
+    /// still runs on every vanilla UpdateRecipes rebuild.
+    /// </summary>
+    public static void PinButtons(RecipeListUI ui)
+    {
+        if (ui == null || ui.currentRecipes == null) return;
+        var buttons = Patches.RecipeButtonsField.GetValue(ui) as List<GameObject>;
+        if (buttons == null || buttons.Count == 0) return;
+
+        var marked = new List<(int MarkIndex, GameObject Button)>();
+        for (int i = 0; i < ui.currentRecipes.Count && i < buttons.Count; i++)
+        {
+            Recipe recipe = ui.currentRecipes[i];
+            if (recipe == null) continue;
+            int markIndex = RecipeMarkerManager.MarkedRecipeIds.IndexOf(recipe.ID);
+            if (markIndex < 0) continue;
+            marked.Add((markIndex, buttons[i]));
+        }
+        if (marked.Count == 0) return;
+
+        marked.Sort((a, b) => a.MarkIndex.CompareTo(b.MarkIndex));
+        for (int i = marked.Count - 1; i >= 0; i--)
+        {
+            Transform t = marked[i].Button.transform;
+            if (t != null) t.SetAsFirstSibling();
+        }
+    }
+}
+
+/// <summary>
+/// ItemsUIPanel.UpdateCategoryRows prefix — pin marked recipe rows to the
+/// top of their own section in the main-menu Recipes gallery (the grid the
+/// player sees under RECIPES / OVEN RECIPES, backed by TaskItemUI cells).
+///
+/// Root cause of the v0.2.11 "not pinned" report: the old pin only patched
+/// RecipeListUI.UpdateRecipes, which drives the worktable craft panel button
+/// list. The gallery grid is rebuilt by ItemsUIPanel.UpdateCategoryRows from
+/// ItemListRowData.taskItemsData (insertion order), and nothing touched that
+/// ordering, so marked rows kept their vanilla position.
+///
+/// This prefix reorders category.taskItemsData in place — marked recipes
+/// first in mark order (MarkedRecipeIds is insertion-ordered, index 0 =
+/// earliest mark), every other entry in its original relative order — right
+/// before the vanilla method slices the list into 7-per-row cells. Because
+/// UpdateCategoryRows runs on every load batch (EndBatchAdd), panel open
+/// (ReloadList), new recipe (AddItem) and section toggle (SetCategoryOpen),
+/// the pin is reapplied everywhere the grid is (re)built. The partition is
+/// stable and idempotent: already-pinned rows stay pinned, unpinned rows
+/// never change relative order, and the persisted TaskItemsManager list is
+/// never modified.
+/// </summary>
+/// <summary>
+/// Runtime mount for the main-menu Recipes gallery pin (ItemsUIPanel grid).
+///
+/// v0.2.12: the previous [HarmonyPatch(typeof(ItemsUIPanel), "UpdateCategoryRows")]
+/// static patch produced no observable effect (and, because LogDebug output is
+/// filtered from the shipped log, no evidence of whether it mounted). To make
+/// mount state observable, the target is now resolved with an exact signature
+/// (ItemListRowData, int) via AccessTools.Method and mounted at startup with
+/// Harmony.Patch — success/failure is logged at Info level, and the prefix
+/// reports fire count / matched marks / pinned rows at Info level for the
+/// first few fires and whenever it actually pins.
+///
+/// The prefix reorders category.taskItemsData in place — marked recipes first
+/// in mark order (MarkedRecipeIds is insertion-ordered, index 0 = earliest
+/// mark), every other entry in its original relative order — right before the
+/// vanilla method slices the list into 7-per-row cells. UpdateCategoryRows
+/// runs on every load batch (EndBatchAdd), panel open (ReloadList), new
+/// recipe (AddItem) and section toggle (SetCategoryOpen), so the pin is
+/// reapplied everywhere the grid is (re)built. The partition is stable and
+/// idempotent; the persisted TaskItemsManager list is never modified.
+/// </summary>
+public static class GalleryMount
+{
+    private const string RecipeIdPrefix = "Recipe_";
+
+    public static bool Mounted { get; private set; }
+
+    private static int _fires;
+
+    public static void TryMount()
+    {
+        if (Mounted) return;
+
+        MethodBase target = AccessTools.Method(typeof(ItemsUIPanel), "UpdateCategoryRows",
+            new[] { typeof(ItemListRowData), typeof(int) });
+        if (target == null)
+        {
+            Plugin.LogInfo("[RecipeMarker] Gallery mount failed: ItemsUIPanel.UpdateCategoryRows(ItemListRowData,int) not found in game assembly.");
+            return;
+        }
+
+        try
+        {
+            Plugin.HarmonyInstance.Patch(target,
+                prefix: new HarmonyMethod(typeof(GalleryMount), nameof(GalleryMount.Prefix)));
+            Mounted = true;
+            Plugin.LogInfo($"[RecipeMarker] Gallery mount OK: {target.DeclaringType?.Name}.{target.Name}({string.Join(", ", Array.ConvertAll(target.GetParameters(), p => p.ParameterType.Name))})");
+        }
+        catch (Exception ex)
+        {
+            Plugin.LogInfo($"[RecipeMarker] Gallery mount failed: {ex.Message}");
+        }
+    }
+
+    private static void Prefix(ItemListRowData category)
+    {
+        try
+        {
+            _fires++;
+            if (category == null || category.taskItemsData == null || category.taskItemsData.Count < 2)
+            {
+                if (_fires <= 3) Plugin.LogInfo($"[RecipeMarker] Gallery prefix #{_fires}: null/empty category, skip.");
+                return;
+            }
+
+            var data = category.taskItemsData;
+            var marked = new List<(int MarkIndex, TaskItemUIData Item)>();
+            var unmarked = new List<TaskItemUIData>(data.Count);
+            foreach (TaskItemUIData uid in data)
+            {
+                if (uid == null) { unmarked.Add(uid); continue; }
+                int markIndex = TryGetMarkIndex(uid);
+                if (markIndex < 0) { unmarked.Add(uid); continue; }
+                marked.Add((markIndex, uid));
+            }
+            if (marked.Count == 0)
+            {
+                if (_fires <= 3) Plugin.LogInfo($"[RecipeMarker] Gallery prefix #{_fires}: section '{category.title}' ({category.itemType}) rows={data.Count}, markedRecipeIds=[{string.Join(",", RecipeMarkerManager.MarkedRecipeIds)}], markedBlueprintIds=[{string.Join(",", RecipeMarkerManager.MarkedBlueprintIds)}], 0 marked recipe/blueprint rows matched.");
+                return;
+            }
+
+            marked.Sort((a, b) => a.MarkIndex.CompareTo(b.MarkIndex));
+            data.Clear();
+            foreach (var entry in marked) data.Add(entry.Item);
+            foreach (TaskItemUIData uid in unmarked) data.Add(uid);
+
+            Plugin.LogInfo($"[RecipeMarker] Gallery prefix #{_fires}: pinned {marked.Count} marked recipe/blueprint row(s) to the top of section '{category.title}' ({category.itemType}) out of {data.Count} rows; first={marked[0].Item.taskItem?.id}.");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[RecipeMarker] Gallery prefix: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Resolve a gallery row to its mark index (position in the insertion-
+    /// ordered marked lists, -1 when not marked). Recipe rows carry a TaskItem
+    /// whose id is "Recipe_{Recipe.ID}" (RecipeController.CreateTaskItem) and
+    /// match MarkedRecipeIds; blueprint rows are TaskItemBlueprint instances
+    /// and match MarkedBlueprintIds by their stable Id. Blueprints gallery
+    /// support was added in v0.2.13 (previously only Recipe_ rows were pinned).
+    /// </summary>
+    private static int TryGetMarkIndex(TaskItemUIData uid)
+    {
+        if (uid?.taskItem == null) return -1;
+        TaskItem taskItem = uid.taskItem;
+
+        if (taskItem is TaskItemBlueprint blueprint)
+        {
+            string blueprintId = blueprint.Id;
+            if (string.IsNullOrEmpty(blueprintId)) return -1;
+            return RecipeMarkerManager.MarkedBlueprintIds.IndexOf(blueprintId);
+        }
+
+        if (string.IsNullOrEmpty(taskItem.id) ||
+            !taskItem.id.StartsWith(RecipeIdPrefix, StringComparison.Ordinal) ||
+            !int.TryParse(taskItem.id.Substring(RecipeIdPrefix.Length),
+                NumberStyles.Integer, CultureInfo.InvariantCulture, out int recipeId))
+        {
+            return -1;
+        }
+        return RecipeMarkerManager.MarkedRecipeIds.IndexOf(recipeId);
     }
 }
 
@@ -198,12 +479,13 @@ public static class WorktableMount
         }
     }
 
-    private static void PatchPanelSlots(FurnitureShopPanelUI panel)
+    internal static void PatchPanelSlots(FurnitureShopPanelUI panel)
     {
         var slots = panel.slots;
         if (slots == null || slots.Count == 0) return;
 
         int attached = 0;
+        var marked = new List<(int MarkIndex, BuildingSystemShopSlot Slot)>();
         foreach (var slot in slots)
         {
             if (slot == null) continue;
@@ -212,9 +494,35 @@ public static class WorktableMount
             {
                 RecipeMarkerStar.AttachBlueprint(slot.gameObject, blueprint, 18f);
                 attached++;
+                int markIndex = RecipeMarkerManager.MarkedBlueprintIds.IndexOf(blueprint.Id);
+                if (markIndex < 0) continue;
+                marked.Add((markIndex, slot));
             }
         }
-        Plugin.LogDebug($"[RecipeMarker] UpdateSlots postfix: {attached}/{slots.Count} worktable slots got stars (panel={panel.name}).");
+
+        // Pin marked blueprint slots to the front of the panel (earliest mark
+        // first), keep every unmarked slot in its vanilla order. Reordering
+        // the Transform hierarchy only affects display, never the underlying
+        // FurnitureInfo data, so category switches / panel rebuilds stay safe
+        // and idempotent.
+        if (marked.Count > 0)
+        {
+            marked.Sort((a, b) => a.MarkIndex.CompareTo(b.MarkIndex));
+            for (int i = marked.Count - 1; i >= 0; i--)
+            {
+                Transform t = marked[i].Slot.gameObject?.transform;
+                if (t != null) t.SetAsFirstSibling();
+            }
+        }
+
+        if (attached > 0 || marked.Count > 0)
+        {
+            Plugin.LogInfo($"[RecipeMarker] UpdateSlots postfix: {attached}/{slots.Count} worktable slots got stars, {marked.Count} marked blueprint(s) pinned to the top (panel={panel.name}).");
+        }
+        else
+        {
+            Plugin.LogDebug($"[RecipeMarker] UpdateSlots postfix: {attached}/{slots.Count} worktable slots got stars (panel={panel.name}).");
+        }
     }
 
     private static void PatchSlot(BuildingSystemSlot slot)
@@ -319,6 +627,54 @@ public static class Patch_TaskItemUI_SetItem
 }
 
 /// <summary>
+/// ItemInfoPanel.UpdateInfo postfix — when the hovered item is consumed by at
+/// least one marked recipe/blueprint, append a compact usage block to the
+/// right-hand info panel:
+///
+///     Required for: {recipe name}
+///     Required amount: {amount}
+///
+/// The block repeats once per consuming marked recipe, so a material used by
+/// several marked recipes lists each of them. The vanilla method resets
+/// itemDescripion to item.Description on every hover, so the appended block
+/// can never accumulate across hovers. "Required for" (instead of the vanilla
+/// tenement "Required in") keeps mod-driven usage visually distinguishable
+/// from apartment upgrades.
+/// </summary>
+[HarmonyPatch(typeof(ItemInfoPanel), nameof(ItemInfoPanel.UpdateInfo))]
+public static class Patch_ItemInfoPanel_UpdateInfo
+{
+    private static void Postfix(ItemInfoPanel __instance, ItemData itemData)
+    {
+        try
+        {
+            if (__instance == null || itemData?.item == null) return;
+            RecipeMarkerManager.EnsureInputCache();
+            if (!RecipeMarkerManager.TryGetRequiredBy(itemData.item.ID, out var entries) ||
+                entries == null || entries.Count == 0) return;
+
+            var description = Patches.ItemInfoDescriptionField.GetValue(__instance) as TextMeshProUGUI;
+            if (description == null) return;
+
+            var sb = new StringBuilder();
+            sb.Append("\n\n");
+            for (int i = 0; i < entries.Count; i++)
+            {
+                if (i > 0) sb.Append("\n");
+                sb.Append("Required for: ").Append(entries[i].Name).Append('\n');
+                sb.Append("Required amount: ").Append(entries[i].Amount.ToString("0.##", CultureInfo.InvariantCulture));
+            }
+            description.text += sb.ToString();
+            Plugin.LogDebug($"[RecipeMarker] ItemInfoPanel postfix: item={itemData.item.Title} (ID {itemData.item.ID}), appended {entries.Count} entry(ies) to right panel.");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[RecipeMarker] ItemInfoPanel postfix: {ex.Message}");
+        }
+    }
+}
+
+/// <summary>
 /// ItemData.UpdateItem postfix — force the vanilla "marked" gold frame on
 /// inventory slots whose item is an input of a marked recipe. Unmarking clears
 /// the frame automatically: the vanilla method resets it to false and our
@@ -332,6 +688,7 @@ public static class Patch_ItemData_UpdateItem
         try
         {
             if (__instance == null || __instance.item == null) return;
+            RecipeMarkerManager.EnsureInputCache();
             if (!RecipeMarkerManager.IsMarkedInputItem(__instance.item.ID)) return;
 
             var markedGo = Patches.ItemDataMarkedField.GetValue(__instance) as GameObject;
@@ -343,6 +700,88 @@ public static class Patch_ItemData_UpdateItem
         catch
         {
             // Never break vanilla inventory updates because of the mod.
+        }
+    }
+}
+
+/// <summary>
+/// ToolTip.Activate(ItemData, int, int, object[]) postfix — inject the same
+/// "Required for / Required amount" block into the floating hover tooltip (the
+/// popup that follows the mouse). The ItemInfoPanel postfix covers the fixed
+/// right-hand side panel, but players read the floating popup while hovering
+/// an item and that is the surface where the vanilla tenement-upgrade block
+/// ("Required in: Apartment N …") is shown. "Required for" is deliberately
+/// different from the vanilla "Required in" so mod-driven usage (marked
+/// recipes/blueprints) is visually distinguishable from vanilla apartment
+/// upgrades.
+///
+/// v0.2.10: the previous dedupe guard (details.text.Contains("Required in:"))
+/// matched the vanilla tenement block too, so while the player had any marked
+/// apartment upgrade the mod block was silently skipped. The guard now matches
+/// the exact injected block; per-hover the vanilla method rebuilds
+/// details.text from scratch, so blocks cannot accumulate across hovers.
+///
+/// The previous TooltipUI.UpdateTooltip prefix relied on
+/// ToolTip.instance.currentItem for the hovered item, but the vanilla
+/// Activate(ItemData) assigns currentItem only AFTER ConstructDataString has
+/// already called UpdateTooltip — so the prefix always read the previous
+/// hover's item and its title guard never matched (and the first hover sees
+/// null). Postfixing Activate instead runs once currentItem is already
+/// correct, and the block is appended straight to the TooltipUI.details text
+/// component (no re-entrant UpdateTooltip, no recipe ingredient list rebuild).
+/// </summary>
+[HarmonyPatch(typeof(ToolTip), nameof(ToolTip.Activate), new[] { typeof(ItemData), typeof(int), typeof(int), typeof(object[]) })]
+public static class Patch_ToolTip_Activate
+{
+    private static readonly FieldInfo TooltipUIsField = AccessTools.Field(typeof(ToolTip), "tooltipUIs");
+    private static readonly FieldInfo TooltipUIDetailsField = AccessTools.Field(typeof(TooltipUI), "details");
+
+    private static void Postfix(ToolTip __instance)
+    {
+        try
+        {
+            if (__instance == null || __instance.currentItem == null) return;
+            RecipeMarkerManager.EnsureInputCache();
+
+            Item item = __instance.currentItem;
+            if (!RecipeMarkerManager.TryGetRequiredBy(item.ID, out var entries) ||
+                entries == null || entries.Count == 0) return;
+
+            var uis = TooltipUIsField.GetValue(__instance) as List<TooltipUI>;
+            if (uis == null) return;
+
+            var sb = new StringBuilder();
+            sb.Append("\n\n");
+            for (int i = 0; i < entries.Count; i++)
+            {
+                if (i > 0) sb.Append("\n");
+                sb.Append("Required for: ").Append(entries[i].Name).Append('\n');
+                sb.Append("Required amount: ").Append(entries[i].Amount.ToString("0.##", CultureInfo.InvariantCulture));
+            }
+            string block = sb.ToString();
+
+            int updated = 0;
+            foreach (var ui in uis)
+            {
+                if (ui == null) continue;
+                var details = TooltipUIDetailsField.GetValue(ui) as TextMeshProUGUI;
+                if (details == null) continue;
+                // v0.2.10: exact-block dedupe. The old guard
+                // (Contains("Required in:")) also matched the vanilla tenement
+                // block, so the mod text was never appended while a vanilla
+                // block was present. Match the full injected block instead;
+                // per-hover details.text is rebuilt from scratch, so nothing
+                // accumulates.
+                if (details.text.Contains(block)) continue;
+                details.text += block;
+                details.gameObject.SetActive(true);
+                updated++;
+            }
+            Plugin.LogDebug($"[RecipeMarker] ToolTip.Activate postfix: item={item.Title} (ID {item.ID}), appended block to {updated}/{uis.Count} tooltip UI(s).");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[RecipeMarker] ToolTip.Activate postfix: {ex.Message}");
         }
     }
 }
